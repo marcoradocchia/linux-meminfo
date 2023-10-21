@@ -6,35 +6,60 @@ use std::{error, fmt, io, result};
 /// Result type alias around [`MemInfoError`].
 pub type Result<T> = result::Result<T, MemInfoError>;
 
-/// A list of errors that may occur while opening, reading or manipulating `/proc/meminfo`.
-#[derive(Debug)]
-pub enum MemInfoError {
+/// A list of errors kinds that may occur while trying to open or read `/proc/meminfo`.
+#[derive(Debug, Clone, Copy)]
+enum MemInfoErrorKind {
     /// Failed to open `/proc/meminfo`.
-    Open(io::Error),
+    Open,
     /// Failed to read `/proc/meminfo`.
-    Read(io::Error),
+    Read,
+}
+
+impl fmt::Display for MemInfoErrorKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Open => f.write_str("open"),
+            Self::Read => f.write_str("read"),
+        }
+    }
+}
+
+/// Error that may occur while trying to open or read `/proc/meminfo`.
+#[derive(Debug)]
+pub struct MemInfoError {
+    source: io::Error,
+    kind: MemInfoErrorKind,
+}
+
+impl MemInfoError {
+    const fn new(source: io::Error, kind: MemInfoErrorKind) -> Self {
+        Self { source, kind }
+    }
+
+    const fn open(source: io::Error) -> Self {
+        Self::new(source, MemInfoErrorKind::Open)
+    }
+
+    const fn read(source: io::Error) -> Self {
+        Self::new(source, MemInfoErrorKind::Read)
+    }
 }
 
 impl fmt::Display for MemInfoError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Open(_) => f.write_str("failed to open `/proc/meminfo`"),
-            Self::Read(_) => f.write_str("failed to read `/proc/meminfo`"),
-        }
+        write!(f, "failed to {} `/proc/meminfo`", self.kind)
     }
 }
 
 impl error::Error for MemInfoError {
     fn source(&self) -> Option<&(dyn error::Error + 'static)> {
-        match self {
-            Self::Open(source) | Self::Read(source) => Some(source),
-        }
+        Some(&self.source)
     }
 }
 
 /// A buffer around `/proc/meminfo`.
 /// Provides easy open and read functionality as well as zero allocation parsing of entries.
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MemInfo {
     /// Buffer holding `/proc/meminfo` data.
     buf: Vec<u8>,
@@ -67,9 +92,9 @@ impl MemInfo {
     fn read(&mut self) -> Result<usize> {
         self.clear();
         File::open("/proc/meminfo")
-            .map_err(MemInfoError::Open)?
+            .map_err(MemInfoError::open)?
             .read_to_end(&mut self.buf)
-            .map_err(MemInfoError::Read)
+            .map_err(MemInfoError::read)
     }
 
     /// Fetches `/proc/meminfo` data and returns an iterator over parsed entries.
@@ -78,11 +103,8 @@ impl MemInfo {
     ///
     /// This method will return a [`MemInfoError`] if the open or read operations fail.
     /// [`MemInfoError`] variants hold their respective error sources.
-    #[tracing::instrument(skip(self))]
     pub fn fetch(&mut self) -> Result<impl Iterator<Item = MemInfoEntry>> {
-        let bytes = self.read()?;
-        tracing::debug!("successfully read {bytes} bytes from `/proc/meminfo`");
-
+        self.read()?;
         Ok(Parser::new(&self.buf))
     }
 }
@@ -212,5 +234,122 @@ impl<'data> Iterator for Parser<'data> {
 
             MemInfoEntry::new(label, size, unit)
         })
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use std::{error::Error, io};
+
+    use super::*;
+
+    #[test]
+    fn meminfo_debug() {
+        let data = r#"MemTotal:        8017324 kB
+MemFree:          658700 kB
+MemAvailable:    3167444 kB
+Buffers:          186968 kB"#;
+        let meminfo = MemInfo {
+            buf: Vec::from(data),
+        };
+
+        assert_eq!(
+            format!("MemInfo {{ buf: {:?} }}", data.as_bytes()),
+            format!("{meminfo:?}"),
+        )
+    }
+
+    #[test]
+    fn meminfo_fetch() -> Result<()> {
+        let mut meminfo = MemInfo::new();
+        let _ = meminfo.fetch()?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn meminfo_entry_debug() {
+        let mem_info_entry = MemInfoEntry {
+            label: "MemTotal",
+            size: "8017324",
+            unit: Some("kB"),
+        };
+
+        assert_eq!(
+            r#"MemInfoEntry { label: "MemTotal", size: "8017324", unit: Some("kB") }"#,
+            format!("{mem_info_entry:?}")
+        );
+    }
+
+    #[test]
+    fn parser_debug() {
+        let data = "MemTotal:        8017324 kB";
+        let parser = Parser::new(data.as_bytes());
+
+        assert_eq!(
+            format!("Parser {{ data: {:?}, cursor: 0 }}", data.as_bytes()),
+            format!("{parser:?}")
+        );
+    }
+
+    #[test]
+    fn meminfo_entries_parse() {
+        let data = r#"MemTotal:        8017324 kB
+VmallocTotal:   34359738367 kB
+HugePages_Total:       0"#;
+        let mut parser = Parser::new(data.as_bytes());
+
+        assert_eq!(
+            Some(MemInfoEntry {
+                label: "MemTotal",
+                size: "8017324",
+                unit: Some("kB"),
+            }),
+            parser.next()
+        );
+
+        assert_eq!(
+            Some(MemInfoEntry {
+                label: "VmallocTotal",
+                size: "34359738367",
+                unit: Some("kB"),
+            }),
+            parser.next(),
+        );
+
+        assert_eq!(
+            Some(MemInfoEntry {
+                label: "HugePages_Total",
+                size: "0",
+                unit: None
+            }),
+            parser.next()
+        );
+
+        assert_eq!(None, parser.next())
+    }
+
+    #[test]
+    fn meminfo_error() {
+        let open_error_source = io::Error::last_os_error();
+        let open_error_source_display = open_error_source.to_string();
+        let open_error = MemInfoError::open(open_error_source);
+
+        let read_error_source = io::Error::last_os_error();
+        let read_error_source_display = read_error_source.to_string();
+        let read_error = MemInfoError::read(read_error_source);
+
+        assert_eq!("failed to open `/proc/meminfo`", open_error.to_string());
+        assert_eq!("failed to read `/proc/meminfo`", read_error.to_string());
+
+        assert_eq!(
+            open_error_source_display,
+            open_error.source().unwrap().to_string()
+        );
+
+        assert_eq!(
+            read_error_source_display,
+            read_error.source().unwrap().to_string()
+        );
     }
 }
