@@ -11,8 +11,6 @@ env:
   RUSTFLAGS: "-Dwarnings"
 
 jobs:
-  clippy:
-    runs-on: ubuntu-latest
   build:
     runs-on: ubuntu-latest
     steps:
