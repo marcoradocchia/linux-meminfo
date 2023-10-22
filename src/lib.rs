@@ -113,11 +113,11 @@ impl MemInfo {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MemInfoEntry<'data> {
     /// Entry's label.
-    label: &'data str,
+    pub label: &'data str,
     /// Entry's size (or amount).
-    size: &'data str,
+    pub size: &'data str,
     /// Entry's unit, if present.
-    unit: Option<&'data str>,
+    pub unit: Option<&'data str>,
 }
 
 impl<'data> MemInfoEntry<'data> {
