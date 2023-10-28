@@ -1,17 +1,15 @@
 use std::fs::File;
 use std::io::Read;
 use std::iter::Iterator;
-use std::{error, fmt, io, result};
-
-/// Result type alias around [`MemInfoError`].
-pub type Result<T> = result::Result<T, MemInfoError>;
+use std::num::ParseIntError;
+use std::{error, fmt, io};
 
 /// A list of errors kinds that may occur while trying to open or read `/proc/meminfo`.
 #[derive(Debug, Clone, Copy)]
 enum MemInfoErrorKind {
-    /// Failed to open `/proc/meminfo`.
+    /// Occurs when opening `/proc/meminfo` fails.
     Open,
-    /// Failed to read `/proc/meminfo`.
+    /// Occurs when reading `/proc/meminfo` fails.
     Read,
 }
 
@@ -27,21 +25,29 @@ impl fmt::Display for MemInfoErrorKind {
 /// Error that may occur while trying to open or read `/proc/meminfo`.
 #[derive(Debug)]
 pub struct MemInfoError {
-    source: io::Error,
+    /// The error kind identifier.
     kind: MemInfoErrorKind,
+    /// The source of the error, i.e. the reason why `/proc/meminfo` can't be open/read.
+    source: io::Error,
 }
 
 impl MemInfoError {
-    const fn new(source: io::Error, kind: MemInfoErrorKind) -> Self {
-        Self { source, kind }
+    /// Constructs a new instance from a `source` and a `kind`.
+    #[inline]
+    const fn new(kind: MemInfoErrorKind, source: io::Error) -> Self {
+        Self { kind, source }
     }
 
+    /// Constructs a new [`MemInfoErrorKind::Open`] variant from a `source`.
+    #[inline]
     const fn open(source: io::Error) -> Self {
-        Self::new(source, MemInfoErrorKind::Open)
+        Self::new(MemInfoErrorKind::Open, source)
     }
 
+    /// Constructs a new [`MemInfoErrorKind::Read`] variant from a `source`.
+    #[inline]
     const fn read(source: io::Error) -> Self {
-        Self::new(source, MemInfoErrorKind::Read)
+        Self::new(MemInfoErrorKind::Read, source)
     }
 }
 
@@ -58,7 +64,9 @@ impl error::Error for MemInfoError {
 }
 
 /// A buffer around `/proc/meminfo`.
-/// Provides easy open and read functionality as well as zero allocation parsing of entries.
+///
+/// Provides automatic open and buffered read of `/proc/meminfo` as well as zero allocation
+/// parsing of entries.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MemInfo {
     /// Buffer holding `/proc/meminfo` data.
@@ -66,10 +74,22 @@ pub struct MemInfo {
 }
 
 impl MemInfo {
-    /// Constructs a new instance.
+    /// Constructs a new instance of the `/proc/meminfo` buffer.
     #[must_use]
+    #[inline]
     pub const fn new() -> Self {
         Self { buf: Vec::new() }
+    }
+
+    /// Opens `/proc/meminfo` and returns a [`File`] instance.
+    ///
+    /// # Errors
+    ///
+    /// This method returns an error if the open operation on `/proc/meminfo` fails.
+    /// [`MemInfoError::Open`] variant hold the respective error source.
+    #[inline]
+    fn open() -> Result<File, MemInfoError> {
+        File::open("/proc/meminfo").map_err(MemInfoError::open)
     }
 
     /// Clears the internal buffer removing all values, without affecting the allocated capacity
@@ -86,108 +106,179 @@ impl MemInfo {
     ///
     /// # Errors
     ///
-    /// This method will return a [`MemInfoError`] if the open or read operations fail.
+    /// This method returns an error if the open or read operations on `/proc/meminfo` fail.
     /// [`MemInfoError`] variants hold their respective error sources.
     #[inline]
-    fn read(&mut self) -> Result<usize> {
+    pub fn read_to_end(&mut self) -> Result<usize, MemInfoError> {
         self.clear();
-        File::open("/proc/meminfo")
-            .map_err(MemInfoError::open)?
+        Self::open()?
             .read_to_end(&mut self.buf)
             .map_err(MemInfoError::read)
     }
 
-    /// Fetches `/proc/meminfo` data and returns an iterator over parsed entries.
+    /// Returns an iterator over parsed entries.
     ///
-    /// # Errors
-    ///
-    /// This method will return a [`MemInfoError`] if the open or read operations fail.
-    /// [`MemInfoError`] variants hold their respective error sources.
-    pub fn fetch(&mut self) -> Result<impl Iterator<Item = MemInfoEntry>> {
-        self.read()?;
-        Ok(Parser::new(&self.buf))
+    /// This method does make use of previously internal buffered data, thus does not clear or
+    /// write bytes of the internal buffer.
+    #[inline]
+    pub fn parse(&self) -> impl Iterator<Item = MemInfoEntry> {
+        Parser::new(&self.buf)
     }
 }
 
-/// A `/proc/meminfo` entry, a parsed line of its content.
+/// Error occurs when parsing [`MemInfoEntry`] size fails.
+#[derive(Debug)]
+pub struct ParseSizeError {
+    /// Entry's label.
+    label: String,
+    /// Entry's size that can't be parsed as usize.
+    size: String,
+    /// The source of the error, i.e. the reason why the size can't be parsed.
+    source: ParseIntError,
+}
+
+impl ParseSizeError {
+    /// Constructs a new instance from `/proc/meminfo` entry's `label` and `size` and the `source`
+    /// of the error.
+    #[inline]
+    fn new(label: &str, size: &str, source: ParseIntError) -> Self {
+        Self {
+            label: String::from(label),
+            size: String::from(size),
+            source,
+        }
+    }
+}
+
+impl fmt::Display for ParseSizeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "failed to parse `{}` size: `{}`", self.label, self.size)
+    }
+}
+
+impl error::Error for ParseSizeError {
+    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
+        Some(&self.source)
+    }
+}
+
+/// A `/proc/meminfo` entry, as a parsed line of its content.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MemInfoEntry<'data> {
-    /// Entry's label.
-    pub label: &'data str,
-    /// Entry's size (or amount).
-    pub size: &'data str,
-    /// Entry's unit, if present.
-    pub unit: Option<&'data str>,
+    /// Entry's **label** (or identifier).
+    label: &'data str,
+    /// Entry's **size** (or amount).
+    size: &'data str,
+    /// Entry's **unit**, if present.
+    ///
+    /// The unit might be missing for entries which do not represent memory sizes
+    /// (e.g. `HugePages_Total`, `HugePages_Free`, etc.).
+    unit: Option<&'data str>,
 }
 
 impl<'data> MemInfoEntry<'data> {
     /// Constructs a new instance, converting fields from raw bytes to string slices.
     #[inline]
     fn new(label: &'data [u8], size: &'data [u8], unit: Option<&'data [u8]>) -> Self {
+        /// Converts a slice of raw bytes into a string slice, validating its content to be UTF-8.
+        ///
+        /// # Panics
+        ///
+        /// This functions panics with a panic message if `bytes` do not represent valid UTF-8.
         #[inline]
         fn from_utf8(bytes: &[u8]) -> &str {
-            std::str::from_utf8(bytes).expect("`/proc/meminfo` to contain valid UTF-8")
+            std::str::from_utf8(bytes).expect("`/proc/meminfo` entries to contain valid UTF-8")
         }
 
-        MemInfoEntry {
+        Self {
             label: from_utf8(label),
             size: from_utf8(size),
             unit: unit.map(from_utf8),
         }
     }
+
+    /// Returns the entry's label.
+    #[inline]
+    #[must_use]
+    pub fn label(&self) -> &str {
+        self.label
+    }
+
+    /// Returns the entry's size.
+    ///
+    /// # Errors
+    ///
+    /// This method returns an error if the entry's size can't be parsed as `usize`.
+    #[inline]
+    pub fn size(&self) -> Result<usize, ParseSizeError> {
+        self.size
+            .parse()
+            .map_err(|error| ParseSizeError::new(self.label, self.size, error))
+    }
+
+    /// Returns the entry's unit, if some.
+    #[inline]
+    #[must_use]
+    pub fn unit(&self) -> Option<&str> {
+        self.unit
+    }
 }
 
 /// A **zero-allocation** `/proc/meminfo` parser.
+///
+/// This parser struct works on string slices and just owns a reference to `/proc/meminfo`'s
+/// buffered bytes (bytes are buffered and owned by the [`MemInfo`] struct). This means that no
+/// heap allocations are performed during the parsing operation.
 #[derive(Debug)]
-pub(crate) struct Parser<'data> {
-    /// `/proc/meminfo` output data.
+struct Parser<'data> {
+    /// The `/proc/meminfo` **data** bytes.
     data: &'data [u8],
-    /// A cursor navigating data's bytes.
+    /// A **cursor** navigating data's bytes. Keeps track of a position inside the data slice.
     cursor: usize,
 }
 
 impl<'data> Parser<'data> {
-    /// Constructs a new `/proc/meminfo` [`Parser`].
+    /// Constructs a new instance of the parser.
+    #[inline]
     const fn new(data: &'data [u8]) -> Self {
         Self { data, cursor: 0 }
     }
 
     /// Checks wheter EOF has been reached.
     ///
-    /// Skips all ASCII whitespaces, incrementing `self.cursor`'s position up until any value not
-    /// included in the _WhatWG Infra Standard_'s definition of whitespace ASCII whitespace (see
-    /// `u8::is_ascii_whitespace`'s documentation), then checks if `self.cursor` has reached the
-    /// end of `self.input`.
+    /// This method skips all ASCII whitespaces, incrementing cursor's position up until any value
+    /// not included in the _WHATWG Infra Standard_'s definition of whitespace ASCII whitespace
+    /// (see `u8::is_ascii_whitespace`'s documentation), then checks if the cursor has reached EOF.
     #[inline]
     fn is_not_eof(&mut self) -> bool {
         self.cursor += self.offset(u8::is_ascii_whitespace);
         self.cursor < self.data.len()
     }
 
-    /// Calculates an offset in `self.input`, based on `operand`, starting from `self.cursor`'s
-    /// position.
+    /// Calculates an **offset** iterating on data bytes and counting yielded elements based on
+    /// `predicate`.
     #[inline]
-    fn offset<F>(&self, operand: F) -> usize
+    fn offset<F>(&self, predicate: F) -> usize
     where
         F: Fn(&u8) -> bool,
     {
         self.data[self.cursor..]
             .iter()
-            .take_while(|byte| operand(byte))
+            .take_while(|byte| predicate(byte))
             .count()
     }
 
-    /// Skips all `U+0020` whitespaces, incrementing `self.cursor`'s position.
+    /// Skips all `U+0020` UTF-8 whitespaces, incrementing cursor's position up to the
+    /// non-whitespace unicode byte.
     ///
-    /// # Notes
-    ///
-    /// This method does not skip any _tab_, _line feed_, _form feed_ or _carriage return_.
+    /// This method does not skip any _tab_, _line feed_, _form feed_ or _carriage return_ UTF-8
+    /// bytes (see `u8::is_ascii_whitespace`).
     #[inline]
     fn skip_whitespace(&mut self) {
         self.cursor += self.offset(|byte| *byte == b' ');
     }
 
-    /// Retrieves current `/proc/meminfo`'s entry label's bytes.
+    /// Returns current `/proc/meminfo`'s entry **label** bytes.
     #[inline]
     fn get_label(&mut self) -> &'data [u8] {
         self.skip_whitespace();
@@ -198,7 +289,7 @@ impl<'data> Parser<'data> {
         label
     }
 
-    /// Retrieves current `/proc/meminfo`'s entry size's bytes.
+    /// Returns current `/proc/meminfo`'s entry **size** bytes.
     #[inline]
     fn get_size(&mut self) -> &'data [u8] {
         self.skip_whitespace();
@@ -209,7 +300,7 @@ impl<'data> Parser<'data> {
         size
     }
 
-    /// Retrieves current `/proc/meminfo`'s entry unit's bytes, if any unit present.
+    /// Returns current `/proc/meminfo`'s entry **unit** bytes, if present.
     #[inline]
     fn get_unit(&mut self) -> Option<&'data [u8]> {
         self.skip_whitespace();
@@ -260,9 +351,11 @@ Buffers:          186968 kB"#;
     }
 
     #[test]
-    fn meminfo_fetch() -> Result<()> {
+    fn meminfo_read() -> Result<(), MemInfoError> {
         let mut meminfo = MemInfo::new();
-        let _ = meminfo.fetch()?;
+        let bytes = meminfo.read_to_end()?;
+        dbg!(&meminfo);
+        assert!(bytes > 0);
 
         Ok(())
     }
@@ -332,23 +425,23 @@ HugePages_Total:       0"#;
     #[test]
     fn meminfo_error() {
         let open_error_source = io::Error::last_os_error();
-        let open_error_source_display = open_error_source.to_string();
+        let open_error_source_string = open_error_source.to_string();
         let open_error = MemInfoError::open(open_error_source);
 
         let read_error_source = io::Error::last_os_error();
-        let read_error_source_display = read_error_source.to_string();
+        let read_error_source_string = read_error_source.to_string();
         let read_error = MemInfoError::read(read_error_source);
 
         assert_eq!("failed to open `/proc/meminfo`", open_error.to_string());
         assert_eq!("failed to read `/proc/meminfo`", read_error.to_string());
 
         assert_eq!(
-            open_error_source_display,
+            open_error_source_string,
             open_error.source().unwrap().to_string()
         );
 
         assert_eq!(
-            read_error_source_display,
+            read_error_source_string,
             read_error.source().unwrap().to_string()
         );
     }
