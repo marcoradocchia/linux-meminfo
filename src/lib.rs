@@ -53,7 +53,7 @@ impl MemInfoError {
 
 impl fmt::Display for MemInfoError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "failed to {} `/proc/meminfo`", self.kind)
+        write!(f, "failed to {} '/proc/meminfo'", self.kind)
     }
 }
 
@@ -152,7 +152,7 @@ impl ParseSizeError {
 
 impl fmt::Display for ParseSizeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "failed to parse `{}` size: `{}`", self.label, self.size)
+        write!(f, "failed to parse '{}' size: '{}'", self.label, self.size)
     }
 }
 
@@ -330,6 +330,7 @@ impl<'data> Iterator for Parser<'data> {
 
 #[cfg(test)]
 mod test {
+    use std::num::IntErrorKind;
     use std::{error::Error, io};
 
     use super::*;
@@ -432,8 +433,8 @@ HugePages_Total:       0"#;
         let read_error_source_string = read_error_source.to_string();
         let read_error = MemInfoError::read(read_error_source);
 
-        assert_eq!("failed to open `/proc/meminfo`", open_error.to_string());
-        assert_eq!("failed to read `/proc/meminfo`", read_error.to_string());
+        assert_eq!("failed to open '/proc/meminfo'", open_error.to_string());
+        assert_eq!("failed to read '/proc/meminfo'", read_error.to_string());
 
         assert_eq!(
             open_error_source_string,
@@ -444,5 +445,40 @@ HugePages_Total:       0"#;
             read_error_source_string,
             read_error.source().unwrap().to_string()
         );
+    }
+
+    #[test]
+    fn parse_size_error() {
+        let overflow = MemInfoEntry::new(
+            "MemTotal".as_bytes(),
+            "18446744073709551617".as_bytes(),
+            Some("kB".as_bytes()),
+        )
+        .size()
+        .unwrap_err();
+
+        assert_eq!(IntErrorKind::PosOverflow, *overflow.source.kind());
+        assert_eq!(
+            "failed to parse 'MemTotal' size: '18446744073709551617'",
+            overflow.to_string(),
+        );
+
+        let float = MemInfoEntry::new(
+            "MemTotal".as_bytes(),
+            "2.4".as_bytes(),
+            Some("kB".as_bytes()),
+        )
+        .size()
+        .unwrap_err();
+
+        assert_eq!(IntErrorKind::InvalidDigit, *float.source.kind());
+        assert_eq!("failed to parse 'MemTotal' size: '2.4'", float.to_string(),);
+
+        let empty = MemInfoEntry::new("MemTotal".as_bytes(), "".as_bytes(), Some("kB".as_bytes()))
+            .size()
+            .unwrap_err();
+
+        assert_eq!(IntErrorKind::Empty, *empty.source.kind());
+        assert_eq!("failed to parse 'MemTotal' size: ''", empty.to_string(),);
     }
 }
