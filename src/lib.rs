@@ -99,6 +99,29 @@ impl MemInfo {
         self.buf.clear();
     }
 
+    /// Clears the internal buffer and shrinks its capacity to the given `size` in bytes.
+    #[inline]
+    pub fn shrink(&mut self, size: usize) {
+        self.clear();
+        self.buf.shrink_to(size);
+    }
+
+    /// Reads the exact number of bytes from `/proc/meminfo` required to fill the internal buffer.
+    ///
+    /// The internally buffered data is cleared before the new data is read into the buffer.
+    ///
+    /// # Errors
+    ///
+    /// This method returns an error if the open or read operations on `/proc/meminfo` fail.
+    /// [`MemInfoError`] variants hold their respective error sources.
+    #[inline]
+    pub fn read(&mut self) -> Result<(), MemInfoError> {
+        self.clear();
+        Self::open()?
+            .read_exact(&mut self.buf)
+            .map_err(MemInfoError::read)
+    }
+
     /// Reads bytes from `/proc/meminfo` until EOF into the internal buffer and returns the total
     /// number of bytes read.
     ///
@@ -472,13 +495,13 @@ HugePages_Total:       0"#;
         .unwrap_err();
 
         assert_eq!(IntErrorKind::InvalidDigit, *float.source.kind());
-        assert_eq!("failed to parse 'MemTotal' size: '2.4'", float.to_string(),);
+        assert_eq!("failed to parse 'MemTotal' size: '2.4'", float.to_string());
 
         let empty = MemInfoEntry::new("MemTotal".as_bytes(), "".as_bytes(), Some("kB".as_bytes()))
             .size()
             .unwrap_err();
 
         assert_eq!(IntErrorKind::Empty, *empty.source.kind());
-        assert_eq!("failed to parse 'MemTotal' size: ''", empty.to_string(),);
+        assert_eq!("failed to parse 'MemTotal' size: ''", empty.to_string());
     }
 }
