@@ -1,20 +1,11 @@
 [package]
-name = "linux-meminfo"
+name = "meminfo"
 version = "0.1.0"
 edition = "2021"
-authors = ["Marco Radocchia <marco.radocchia@outlook.com"]
-rust-version = "1.73.0"
-description = "A zero-allocations /proc/meminfo parsing library for Rust."
-readme = "README.md"
-repository = "https://github.com/marcoradocchia/linux-meminfo"
-license = "GPL-3.0-only"
-keywords = ["linux", "meminfo", "procfs", "memory", "parser"]
-categories = ["parsing"]
- 
-[lib]
-name = "meminfo"
-path = "src/lib.rs"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+
+[features]
+utf8-unchecked = []

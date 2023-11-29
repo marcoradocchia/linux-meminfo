@@ -3,5 +3,5 @@
 version = 3
 
 [[package]]
-name = "linux-meminfo"
+name = "meminfo"
 version = "0.1.0"
