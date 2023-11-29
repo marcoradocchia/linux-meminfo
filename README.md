@@ -2,13 +2,13 @@
 
 This library provides easy and low level access to `meminfo`, the _pseudofile_
 placed by the Linux kernel inside the `proc` _pseudo-filesystem_ (for more
-information, see the `proc` manpage, online version at
-<https://man7.org/linux/man-pages/man5/proc.5.html>).
+information, see the `proc`
+[manpage](https://man7.org/linux/man-pages/man5/proc.5.html)).
 
 The public API is built around the `MemInfo` type, a struct responsible for
 retrieving memory-related information about the system. Calling its constructor
 opens the `/proc/meminfo` pseudofile and reads its data into an internal buffer.
-Having [`MemInfo`] to own both the open file and a buffer of its data allows
+Having `MemInfo` to own both the open file and a buffer of its data allows
 separation of concerns between _reading_ from the pseudofile, _managing_ and
 _parsing_ the buffered data.
 

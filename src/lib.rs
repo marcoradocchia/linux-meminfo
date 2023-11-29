@@ -2,7 +2,7 @@
 //!
 //! This library provides easy and low level access to `meminfo`, the _pseudofile_ placed
 //! by the Linux kernel inside the `proc` _pseudo-filesystem_ (for more information, see the `proc`
-//! manpage, online version at <https://man7.org/linux/man-pages/man5/proc.5.html>).
+//! [manpage](https://man7.org/linux/man-pages/man5/proc.5.html)).
 //!
 //! The public API is built around the [`MemInfo`] type, a struct responsible for retrieving
 //! memory-related information about the system. Calling its [constructor](`MemInfo::new`)
