@@ -10,14 +10,18 @@
 //! Having [`MemInfo`] to own both the open file and a buffer of its data allows separation of
 //! concerns between _reading_ from the pseudofile, _managing_ and _parsing_ the buffered data.
 //!
+//! The parser implementation responsible for parsing `/proc/meminfo` entries works exclusively on
+//! string slices, just owning a reference to the pseudofile buffered bytes. This allows for
+//! efficient, **zero-allocation** parsing.
+//!
 //! ## Examples
 //!
 //! The following example shows the most basic usage of the [`MemInfo`] API. First we construct
 //! a new instance, which translates to `/proc/meminfo` being opened and read into the internal
 //! buffer; then we call the [`MemInfo::parse`], which returns a **lazy** iterator over parsed
 //! entries, in this case represented by the [`MemInfoEntry`] type. The iterator being lazy
-//! meaning it parses a new entry on each call to the `next` method. In other words: you pay only
-//! for the entries you parse.
+//! meaning it parses a new entry on each call to the `next` method. In other words: _pay only
+//! for the entries you parse_.
 //!
 //! ```rust
 //! use std::error;
@@ -37,6 +41,79 @@
 //!     Ok(())
 //! }
 //! ```
+//! In certain scenarios, users may have distinct use cases that necessitate regular retrieval of
+//! a particular set of entries within the `/proc/meminfo` pseudofile. The
+//! [`MemInfo::parse_extended`] addresses this requirement in an efficient fashion, extending
+//! parsed entries with additional information pertaining to the byte range they occupy in the file
+//! stream. This functionality allows users to selectively read and parse specific entries as
+//! needed. Also, this way, the internal buffer can be shrank to the capacity required to read in
+//! such entries, reducing the runtime memory footprint of the program
+//!
+//! ```no_run
+//! use std::io::SeekFrom;
+//! use std::time::Duration;
+//! use std::{error, thread};
+//!
+//! use meminfo::{MemInfo, MemInfoError};
+//!
+//! #[derive(Debug)]
+//! struct MemAvailable {
+//!     size: usize,
+//!     start_pos: usize,
+//! }
+//!
+//! impl MemAvailable {
+//!     fn new(meminfo: &mut MemInfo) -> Result<Self, MemInfoError> {
+//!         let mut entries = meminfo.parse_extended().skip(2);
+//!
+//!         let mem_available = entries.next().unwrap();
+//!         assert_eq!("MemAvailable", mem_available.label());
+//!         assert_eq!(Some("kB"), mem_available.unit());
+//!
+//!         let size = mem_available.size().unwrap();
+//!         let start_pos = mem_available.start_pos();
+//!         let capacity = mem_available.required_capacity();
+//!
+//!         drop(entries);
+//!         meminfo.clear();
+//!         meminfo.shrink_to(capacity);
+//!
+//!         Ok(MemAvailable { size, start_pos })
+//!     }
+//!
+//!     fn fetch(&mut self, meminfo: &mut MemInfo) -> Result<(), MemInfoError> {
+//!         let seek_pos = SeekFrom::Start(self.start_pos as u64);
+//!         meminfo.seek(seek_pos)?;
+//!
+//!         meminfo.clear();
+//!         meminfo.read()?;
+//!
+//!         let entry = meminfo.parse().next().unwrap();
+//!         self.size = entry.size().unwrap();
+//!
+//!         Ok(())
+//!     }
+//! }
+//!
+//! fn main() -> Result<(), Box<dyn error::Error>> {
+//!     let mut meminfo = MemInfo::new()?;
+//!     let mut mem_available = MemAvailable::new(&mut meminfo)?;
+//!
+//!     loop {
+//!         println!("System's available RAM: {}kB", mem_available.size);
+//!         thread::sleep(Duration::from_secs(2));
+//!         mem_available.fetch(&mut meminfo)?;
+//!     }
+//! }
+//! ```
+//!
+//! ## Features
+//!
+//! By default, the [`MemInfoEntry`] and [`MemInfoEntryExtended`] constructors perform UTF-8
+//! validation on `/proc/meminfo` parsed data. Malformed data would cause a panic in this case.
+//! However, enabling the `utf8-unchecked` feature removes such validation, potentially increasing
+//! parsing performance. To achieve this, the new constructors make use of unsafe code, thus the
+//! user should be aware that malformed `/proc/meminfo` data would cause undefined behaviour.
 
 // -----------------------------------------------------------------------------------------------
 // -- Crate modules --
@@ -140,6 +217,7 @@ impl MemInfoError {
 
     /// Returns the error kind.
     #[inline]
+    #[must_use]
     pub fn kind(&self) -> &MemInfoErrorKind {
         &self.kind
     }
@@ -170,7 +248,7 @@ impl error::Error for MemInfoError {
 pub struct MemInfo {
     /// The buffer holind data from `/proc/meminfo`.
     buf: Vec<u8>,
-    /// The open `/proc/meminfo` pseudofile.
+    /// The `/proc/meminfo` pseudofile.
     file: File,
 }
 
@@ -246,7 +324,7 @@ impl MemInfo {
         self.buf.shrink_to_fit();
     }
 
-    /// Shrinks the capacity of the internal buffer with a lower `size` bound.
+    /// Shrinks the capacity of the internal buffer with a lower `capacity` bound.
     ///
     /// # Notes
     ///
@@ -257,11 +335,11 @@ impl MemInfo {
     /// Also, if the current buffer _capacity_ is smaller than the specified `size`, this method
     /// will result in a **no-op**.
     #[inline]
-    pub fn shrink_to(&mut self, size: usize) {
-        self.buf.shrink_to(size);
+    pub fn shrink_to(&mut self, capacity: usize) {
+        self.buf.shrink_to(capacity);
     }
 
-    /// Rewinds the open `/proc/meminfo` pseudofile to the beginning of the stream.
+    /// Rewinds `/proc/meminfo` to the beginning of the stream.
     ///
     /// # Notes
     ///
@@ -269,18 +347,18 @@ impl MemInfo {
     ///
     /// # Errors
     ///
-    /// Returns an error if the open `/proc/meminfo` pseudofile could not be rewinded.
+    /// Returns an error if `/proc/meminfo` could not be rewinded.
     #[inline]
     pub fn rewind(&mut self) -> Result<()> {
         self.file.rewind().map_err(MemInfoError::rewind)
     }
 
-    /// Seeks the open`/proc/meminfo` pseudofile to an offset and returns the new position from
-    /// the start of the stream.
+    /// Seeks `/proc/meminfo` to an offset and returns the new position from the start of the
+    /// stream.
     ///
     /// # Errors
     ///
-    /// Returns an error if the open `/proc/meminfo` pseudofile cound not be sought.
+    /// Returns an error if `/proc/meminfo` could not be sought.
     #[inline]
     pub fn seek(&mut self, pos: SeekFrom) -> Result<u64> {
         self.file.seek(pos).map_err(MemInfoError::seek)

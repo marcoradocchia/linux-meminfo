@@ -171,10 +171,32 @@ impl<'m> MemInfoEntryExtended<'m> {
         }
     }
 
+    /// Returns the byte range of the entry in the `/proc/meminfo` file stream.
     #[inline]
     #[must_use]
     pub fn byte_range(&self) -> &Range<usize> {
         &self.range
+    }
+
+    /// Returns the start position of the entry in the `/proc/meminfo` file stream.
+    #[inline]
+    #[must_use]
+    pub fn start_pos(&self) -> usize {
+        self.range.start
+    }
+
+    /// Returns the end position of the entry in the `/proc/meminfo` file stream.
+    #[inline]
+    #[must_use]
+    pub fn end_pos(&self) -> usize {
+        self.range.end
+    }
+
+    /// Returns the required buffer capacity to read fit the entry raw bytes.
+    #[inline]
+    #[must_use]
+    pub fn required_capacity(&self) -> usize {
+        self.range.end - self.range.start
     }
 }
 
