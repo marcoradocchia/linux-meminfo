@@ -14,11 +14,11 @@ _parsing_ the buffered data.
 
 ## Examples
 
-The following example shows the most basic usage of the [`MemInfo`] API. First
+The following example shows the most basic usage of the `MemInfo` API. First
 we construct a new instance, which translates to `/proc/meminfo` being opened
-and read into the internal buffer; then we call the [`MemInfo::parse`], which
+and read into the internal buffer; then we call the `MemInfo::parse`, which
 returns a **lazy** iterator over parsed entries, in this case represented by
-the [`MemInfoEntry`] type. The iterator being lazy meaning it parses a new
+the `MemInfoEntry` type. The iterator being lazy meaning it parses a new
 entry on each call to the `next` method. In other words: you pay only for the
 entries you parse.
 
