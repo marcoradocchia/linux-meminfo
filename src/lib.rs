@@ -20,7 +20,7 @@
 //! a new instance, which translates to `/proc/meminfo` being opened and read into the internal
 //! buffer; then we call the [`MemInfo::parse`], which returns a **lazy** iterator over parsed
 //! entries, in this case represented by the [`MemInfoEntry`] type. The iterator being lazy
-//! meaning it parses a new entry on each call to the `next` method. In other words: _pay only
+//! meaning it parses a new entry on each call to the `next` method. In other words: _you only pay
 //! for the entries you parse_.
 //!
 //! ```rust
@@ -41,13 +41,14 @@
 //!     Ok(())
 //! }
 //! ```
-//! In certain scenarios, users may have distinct use cases that necessitate regular retrieval of
-//! a particular set of entries within the `/proc/meminfo` pseudofile. The
-//! [`MemInfo::parse_extended`] addresses this requirement in an efficient fashion, extending
-//! parsed entries with additional information pertaining to the byte range they occupy in the file
-//! stream. This functionality allows users to selectively read and parse specific entries as
-//! needed. Also, this way, the internal buffer can be shrank to the capacity required to read in
-//! such entries, reducing the runtime memory footprint of the program
+//!
+//! Users may have distinct use cases that call for regular retrieval of a particular set of
+//! entries within the `/proc/meminfo` pseudofile. The [`MemInfo::parse_extended`] efficiently
+//! addresses this requirement, extending parsed entries with additional information pertaining to
+//! the byte range they occupy in the file stream. This functionality allows users to selectively
+//! read and parse specific entries as needed. Also, this way, the internal buffer can be shrank to
+//! the capacity required to read in such entries, reducing the runtime memory footprint of the
+//! program.
 //!
 //! ```no_run
 //! use std::io::SeekFrom;
